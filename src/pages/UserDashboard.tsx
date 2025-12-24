@@ -1,256 +1,161 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
 import { useNavigate } from "react-router-dom";
-import { 
-  Loader2, FileText, RefreshCw, CheckCircle, 
-  XCircle, Clock, ExternalLink, Plus, ShieldCheck, Wallet 
-} from "lucide-react";
+import html2canvas from "html2canvas";
+import { Loader2, FileText, RefreshCw, CheckCircle, XCircle, Clock, ExternalLink, Plus, ShieldCheck, Wallet, Eye, Mail, MapPin, Briefcase, Download } from "lucide-react";
 
-// UI Components
 import Header from "@/components/Header";
+import OfficialLicense from "@/components/OfficialLicense";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-
-// Constants
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from "@/constants";
 
-// --- TYPES ---
 interface MyLicense {
-  id: number;
-  name: string;
-  status: "Pending" | "Approved" | "Rejected" | "Revoked";
-  issueDate: string;
-  expiryDate: string;
-  ipfsHash: string;
+  id: number; businessName: string; regNumber: string; email: string; address: string; 
+  description: string; sector: string; type: string; status: "Pending" | "Approved" | "Rejected" | "Revoked";
+  issueDate: string; expiryDate: string; ipfsHash: string;
 }
 
 const UserDashboard = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const certRef = useRef<HTMLDivElement>(null);
   
-  const [wallet, setWallet] = useState("");
+  const [isConnected, setIsConnected] = useState(false);
+  const [currentAddress, setCurrentAddress] = useState("");
   const [loading, setLoading] = useState(false);
   const [myApps, setMyApps] = useState<MyLicense[]>([]);
 
-  // --- 1. INITIAL LOAD ---
   useEffect(() => {
-    checkIfWalletConnected();
+    checkConnection();
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', (accounts: string[]) => {
+        if (accounts.length > 0) { setCurrentAddress(accounts[0]); setIsConnected(true); } 
+        else { setIsConnected(false); setMyApps([]); }
+      });
+    }
   }, []);
 
-  const checkIfWalletConnected = async () => {
+  useEffect(() => { if (isConnected && currentAddress) fetchMyLicenses(currentAddress); }, [isConnected, currentAddress]);
+
+  const checkConnection = async () => {
     if (!window.ethereum) return;
-    try {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const accounts = await provider.listAccounts();
-        if (accounts.length > 0) {
-            setWallet(accounts[0].address);
-            fetchMyLicenses(accounts[0].address, provider);
-        }
-    } catch (err) { console.error(err); }
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const accounts = await provider.listAccounts();
+    if (accounts.length > 0) { setCurrentAddress(accounts[0].address); setIsConnected(true); }
   };
 
-  // --- 2. CONNECT WALLET ---
-  const connectWallet = async () => {
-    if (!window.ethereum) return toast({ title: "Error", description: "MetaMask not found", variant: "destructive" });
-    try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const accounts = await provider.send("eth_requestAccounts", []);
-      
-      if (accounts.length > 0) {
-        const address = accounts[0];
-        setWallet(address);
-        fetchMyLicenses(address, provider);
-        toast({ title: "Connected", description: "Wallet linked successfully." });
-      }
-    } catch (err) {
-      console.error("Wallet connection error:", err);
-    }
-  };
-
-  // --- 3. FETCH DATA ---
-  const fetchMyLicenses = async (userAddr: string, provider: ethers.BrowserProvider) => {
+  const fetchMyLicenses = async (userAddr: string) => {
     setLoading(true);
     try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
       const count = Number(await contract.licenseCount());
-      
       const apps: MyLicense[] = [];
-      
       for (let i = 1; i <= count; i++) {
         const lic = await contract.getLicense(i);
         if (lic[9].toLowerCase() === userAddr.toLowerCase()) {
           apps.push({
-            id: Number(lic[0]),
-            name: lic[1],
-            status: lic[12] as any, 
+            id: Number(lic[0]), businessName: lic[1], regNumber: lic[2], email: lic[3],
+            address: lic[4], description: lic[5], type: lic[6], sector: lic[7], ipfsHash: lic[8],
             issueDate: Number(lic[10]) > 0 ? new Date(Number(lic[10]) * 1000).toLocaleDateString() : "-",
             expiryDate: Number(lic[11]) > 0 ? new Date(Number(lic[11]) * 1000).toLocaleDateString() : "-",
-            ipfsHash: lic[8]
+            status: lic[12] as any
           });
         }
       }
       setMyApps(apps.reverse());
-    } catch (err) {
-      console.error("Fetch error:", err);
-    } finally {
-      setLoading(false);
+    } finally { setLoading(false); }
+  };
+
+  const downloadDoc = async (name: string) => {
+    if (certRef.current) {
+      await new Promise(r => setTimeout(r, 100)); // Ensure render
+      const canvas = await html2canvas(certRef.current, { scale: 3, backgroundColor: "#ffffff" });
+      const link = document.createElement("a");
+      link.download = `License_${name}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      toast({ title: "Downloaded", description: "Official license saved." });
     }
   };
 
-  const handleRefresh = async () => {
-    if (!window.ethereum || !wallet) return;
-    const provider = new ethers.BrowserProvider(window.ethereum);
-    await fetchMyLicenses(wallet, provider);
-    toast({ title: "Refreshed", description: "Dashboard updated." });
-  };
-
-  // --- RENDER: LOGIN GATE ---
-  if (!wallet) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-        <Header />
-        <div className="flex-grow flex items-center justify-center p-4">
-          <Card className="w-full max-w-md shadow-xl border-t-4 border-blue-600">
-            <CardHeader className="text-center pb-2">
-              <div className="mx-auto bg-blue-50 p-4 rounded-full w-fit mb-4">
-                <Wallet className="h-10 w-10 text-blue-600" />
-              </div>
-              <CardTitle className="text-2xl font-bold text-slate-900">User Dashboard</CardTitle>
-              <CardDescription>Connect your wallet to view and manage your licenses.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button onClick={connectWallet} className="w-full h-12 text-lg bg-blue-600 hover:bg-blue-700 shadow-md">
-                Connect MetaMask
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
+  if (!isConnected) return (
+    <div className="min-h-screen bg-slate-50 flex flex-col">
+      <Header />
+      <div className="flex-grow flex items-center justify-center p-4">
+        <Card className="w-full max-w-sm shadow-xl border-t-4 border-blue-600">
+          <CardHeader className="text-center">
+            <Wallet className="h-10 w-10 text-blue-600 mx-auto mb-2" />
+            <CardTitle>User Dashboard</CardTitle>
+            <CardDescription>Connect wallet to manage licenses.</CardDescription>
+          </CardHeader>
+          <CardContent><Button className="w-full bg-blue-600" onClick={() => window.ethereum.request({ method: 'eth_requestAccounts' })}>Connect Wallet</Button></CardContent>
+        </Card>
       </div>
-    );
-  }
+    </div>
+  );
 
-  // --- RENDER: DASHBOARD ---
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       <Header />
-      
       <main className="flex-grow container mx-auto px-4 py-8">
-        
-        {/* --- TOP BAR --- */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-slate-900 tracking-tight">User Dashboard</h1>
-                <Badge className="bg-blue-600 text-white hover:bg-blue-700">APPLICANT</Badge>
-            </div>
-            <p className="text-slate-500 mt-1">Manage your digital licenses and applications.</p>
-          </div>
-          
-          <div className="flex items-center gap-3">
-             {/* WALLET BADGE */}
-             <div className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-full shadow-sm text-sm font-mono text-slate-600">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                {wallet.slice(0,6)}...{wallet.slice(-4)}
-             </div>
-             
-             {/* SIMPLE REFRESH BUTTON */}
-             <Button variant="outline" onClick={handleRefresh} disabled={loading} className="bg-white hover:bg-slate-50">
-                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                Refresh
-             </Button>
-          </div>
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-bold text-slate-900">User Dashboard</h1>
+          <Button variant="outline" onClick={() => fetchMyLicenses(currentAddress)} className="bg-white">
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
         </div>
 
-        {/* --- ACTION BAR --- */}
-        <div className="mb-10">
-           <Button 
-             onClick={() => navigate("/apply")} 
-             className="bg-blue-600 hover:bg-blue-700 h-14 text-lg px-8 shadow-md hover:shadow-lg transition-all"
-           >
-             <Plus className="mr-2 h-5 w-5" /> Apply for New License
-           </Button>
-        </div>
+        <Button onClick={() => navigate("/apply")} className="bg-slate-900 h-14 text-lg px-8 mb-10 shadow-md"><Plus className="mr-2 h-5 w-5" /> New Application</Button>
 
-        {/* --- LICENSE LIST --- */}
-        <h2 className="text-xl font-bold mb-6 text-slate-800 flex items-center gap-2 border-b pb-4">
-          <FileText className="h-5 w-5 text-slate-500" /> My Applications
-        </h2>
+        <h2 className="text-xl font-bold mb-6 text-slate-800 border-b pb-4 flex items-center gap-2"><FileText className="h-5 w-5 text-slate-400" /> My Applications</h2>
         
-        {loading && myApps.length === 0 ? (
-           <div className="flex flex-col items-center justify-center py-20">
-             <Loader2 className="animate-spin h-10 w-10 text-blue-600 mb-4" />
-             <p className="text-slate-500">Syncing with Blockchain...</p>
-           </div>
-        ) : myApps.length === 0 ? (
-           <Card className="border-dashed border-2 bg-slate-50/50 shadow-none">
-             <CardContent className="flex flex-col items-center justify-center py-16 text-slate-500">
-                <div className="bg-slate-100 p-4 rounded-full mb-4">
-                  <FileText className="h-8 w-8 text-slate-400" />
+        <div className="grid gap-4">
+          {myApps.map((app) => (
+            <Card key={app.id} className="border-l-4" style={{ borderLeftColor: app.status === "Approved" ? "#16a34a" : app.status === "Rejected" ? "#dc2626" : "#3b82f6" }}>
+              <CardContent className="p-6 flex items-center justify-between">
+                <div className="flex items-start gap-4">
+                  <div className={`p-2 rounded-full ${app.status === "Approved" ? "bg-green-50 text-green-600" : "bg-blue-50 text-blue-600"}`}>
+                    {app.status === "Approved" ? <CheckCircle /> : <Clock />}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">{app.businessName}</h3>
+                    <p className="text-sm text-slate-500">#{app.id} • {app.regNumber} • {app.sector}</p>
+                    <Dialog>
+                      <DialogTrigger asChild><button className="text-blue-600 text-sm hover:underline mt-2 flex items-center gap-1 font-medium"><Eye className="h-3 w-3" /> View Details</button></DialogTrigger>
+                      <DialogContent className="max-w-2xl p-8">
+                        <DialogHeader><DialogTitle className="text-2xl font-bold border-b pb-2">Application Details</DialogTitle></DialogHeader>
+                        <div className="grid grid-cols-2 gap-4 mt-4 text-sm">
+                          <div><p className="font-bold text-slate-400 uppercase text-[10px]">Business Name</p><p className="font-semibold text-lg">{app.businessName}</p></div>
+                          <div><p className="font-bold text-slate-400 uppercase text-[10px]">Status</p><Badge className={app.status === "Approved" ? "bg-green-600" : "bg-blue-600"}>{app.status}</Badge></div>
+                          <div><p className="font-bold text-slate-400 uppercase text-[10px]">Registration No.</p><p className="font-mono">{app.regNumber}</p></div>
+                          <div><p className="font-bold text-slate-400 uppercase text-[10px]">Type / Sector</p><p>{app.type} / {app.sector}</p></div>
+                          <div><p className="font-bold text-slate-400 uppercase text-[10px]">Email</p><p>{app.email}</p></div>
+                          <div><p className="font-bold text-slate-400 uppercase text-[10px]">Applied Date</p><p>{app.issueDate}</p></div>
+                        </div>
+                        <div className="mt-4 pt-4 border-t"><p className="font-bold text-slate-400 uppercase text-[10px]">Address</p><p className="text-sm">{app.address}</p></div>
+                        <div className="mt-4 bg-slate-50 p-3 rounded italic text-sm border font-medium">"{app.description}"</div>
+                        <div className="mt-6 flex gap-4">
+                          {app.ipfsHash && <a href={app.ipfsHash} target="_blank" className="flex-1 border text-center py-2 rounded text-sm font-bold bg-white hover:bg-slate-50 flex items-center justify-center gap-2"><ExternalLink className="h-4 w-4"/> KYC Doc</a>}
+                          {app.status === "Approved" && <Button onClick={() => downloadDoc(app.businessName)} className="flex-1 bg-green-600 hover:bg-green-700"><Download className="h-4 w-4 mr-2"/> Download License</Button>}
+                        </div>
+                        {/* OFF-SCREEN RENDER FOR DOWNLOAD */}
+<div style={{ position: 'absolute', top: '-9999px', left: '-9999px' }}>
+  <OfficialLicense ref={certRef} data={app} contractAddress={CONTRACT_ADDRESS} />
+</div>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
                 </div>
-                <p className="text-lg font-medium text-slate-700">No applications found</p>
-                <p className="text-sm mb-6">You haven't submitted any license requests yet.</p>
-                <Button variant="outline" onClick={() => navigate("/apply")}>Start Application</Button>
-             </CardContent>
-           </Card>
-        ) : (
-           <div className="grid gap-4">
-             {myApps.map((app) => (
-               <Card key={app.id} className="border-l-4 overflow-hidden bg-white shadow-sm" 
-                     style={{ borderLeftColor: app.status === "Approved" ? "#16a34a" : app.status === "Rejected" ? "#dc2626" : "#3b82f6" }}>
-                 <CardContent className="p-6 flex flex-col md:flex-row items-center justify-between gap-6">
-                   
-                   {/* LEFT: ICON & INFO */}
-                   <div className="flex items-start gap-5 w-full md:w-auto">
-                     <div className={`p-3 rounded-full shrink-0 ${
-                        app.status === "Approved" ? "bg-green-50 text-green-600" :
-                        app.status === "Rejected" ? "bg-red-50 text-red-600" :
-                        "bg-blue-50 text-blue-600"
-                     }`}>
-                        {app.status === "Approved" ? <ShieldCheck className="h-8 w-8"/> : 
-                         app.status === "Rejected" ? <XCircle className="h-8 w-8"/> : 
-                         <Clock className="h-8 w-8"/>}
-                     </div>
-                     <div>
-                       <h3 className="font-bold text-xl text-slate-900">{app.name}</h3>
-                       <div className="flex flex-wrap gap-4 text-sm text-slate-500 mt-2">
-                          <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-xs border border-slate-200">ID: #{app.id}</span>
-                          {app.status === "Approved" && <span className="flex items-center text-green-700"><CheckCircle className="w-3 h-3 mr-1"/> Expires: {app.expiryDate}</span>}
-                          {app.ipfsHash && (
-                            <a href={app.ipfsHash} target="_blank" className="text-blue-600 hover:underline flex items-center gap-1 bg-blue-50 px-2 rounded">
-                              <ExternalLink className="h-3 w-3" /> View Documents
-                            </a>
-                          )}
-                       </div>
-                     </div>
-                   </div>
-
-                   {/* RIGHT: STATUS & ACTION */}
-                   <div className="flex flex-row md:flex-col items-center md:items-end gap-3 w-full md:w-auto justify-between md:justify-center">
-                      <Badge className={`text-sm py-1.5 px-4 ${
-                        app.status === "Approved" ? "bg-green-600 hover:bg-green-700" :
-                        app.status === "Rejected" ? "bg-red-600 hover:bg-red-700" :
-                        "bg-blue-600 hover:bg-blue-700"
-                      }`}>
-                        {app.status}
-                      </Badge>
-                      
-                      {app.status === "Pending" && (
-                        <span className="text-xs text-slate-400 italic">Under Review</span>
-                      )}
-                      
-                      {app.status === "Rejected" && (
-                         <span className="text-xs text-red-500 font-medium">Contact Admin</span>
-                      )}
-                   </div>
-
-                 </CardContent>
-               </Card>
-             ))}
-           </div>
-        )}
-
+                <Badge className={app.status === "Approved" ? "bg-green-600" : "bg-blue-600"}>{app.status}</Badge>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </main>
     </div>
   );

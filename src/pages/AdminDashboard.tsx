@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import { ethers } from "ethers";
 import { 
   FileText, CheckCircle, XCircle, RefreshCw, Search, 
-  Loader2, ShieldAlert, Lock, LogOut, Wallet, Eye, ExternalLink 
+  Loader2, Lock, Eye, ExternalLink, ShieldCheck, 
+  Mail, MapPin, User, Building2, CreditCard, PhoneCall 
 } from "lucide-react";
 import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
@@ -14,58 +15,56 @@ import { useToast } from "@/hooks/use-toast";
 import { CONTRACT_ADDRESS, CONTRACT_ABI, ADMIN_WALLET_ADDRESS } from "@/constants";
 
 interface Application {
-  id: number;
-  businessName: string;
-  regNumber: string;
-  sector: string;
-  applicant: string;
-  date: string;
-  status: "Pending" | "Approved" | "Rejected" | "Revoked";
+  id: number; businessName: string; regNumber: string; email: string;
+  address: string; description: string; type: string; sector: string;
+  applicant: string; date: string; status: "Pending" | "Approved" | "Rejected" | "Revoked";
   ipfsHash: string;
 }
 
 const AdminDashboard = () => {
   const { toast } = useToast();
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [viewState, setViewState] = useState<"DISCONNECTED" | "UNAUTHORIZED" | "AUTHORIZED">("DISCONNECTED");
   const [currentAddress, setCurrentAddress] = useState("");
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [processingId, setProcessingId] = useState<number | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string>("All");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const maskAddress = (addr: string) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "";
 
   useEffect(() => {
-    if (isAdmin) fetchBlockchainData();
-  }, [isAdmin]);
+    checkWalletStatus();
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', (accounts: string[]) => {
+        if (accounts.length === 0) { setViewState("DISCONNECTED"); setCurrentAddress(""); }
+        else validateAdmin(accounts[0]);
+      });
+    }
+  }, []);
 
-  // --- FORCE POPUP LOGIN ---
-  const handleLogin = async () => {
-    if (!window.ethereum) return toast({ title: "Error", description: "MetaMask not found", variant: "destructive" });
-    
-    setIsConnecting(true);
+  useEffect(() => {
+    if (viewState === "AUTHORIZED") fetchBlockchainData();
+  }, [viewState]);
+
+  const checkWalletStatus = async () => {
+    if (!window.ethereum) return;
     try {
       const provider = new ethers.BrowserProvider(window.ethereum);
-      
-      // ⚠️ FORCE METAMASK POPUP
-      await provider.send("eth_requestAccounts", []);
-      
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-      setCurrentAddress(address);
+      const accounts = await provider.listAccounts();
+      if (accounts.length > 0) validateAdmin(accounts[0].address);
+      else setViewState("DISCONNECTED");
+    } catch (err) { console.error(err); }
+  };
 
-      if (address.toLowerCase() === ADMIN_WALLET_ADDRESS.toLowerCase()) {
-        setIsAdmin(true);
-        toast({ title: "Welcome Admin 🔓", className: "bg-green-600 text-white" });
-      } else {
-        toast({ title: "Access Denied ⛔", description: "Wallet is not authorized.", variant: "destructive" });
-      }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsConnecting(false);
-    }
+  const validateAdmin = (address: string) => {
+    setCurrentAddress(address);
+    if (address.toLowerCase() === ADMIN_WALLET_ADDRESS.toLowerCase()) setViewState("AUTHORIZED");
+    else setViewState("UNAUTHORIZED");
   };
 
   const fetchBlockchainData = async () => {
-    if (!window.ethereum) return;
+    setLoading(true);
     try {
       const provider = new ethers.BrowserProvider(window.ethereum);
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
@@ -74,22 +73,49 @@ const AdminDashboard = () => {
 
       for (let i = count; i >= 1; i--) {
         const lic = await contract.getLicense(i);
+        const status = lic[12];
+        
+        // Filter out revoked applications
+        if (status === "Revoked") continue;
+
         data.push({
           id: Number(lic[0]),
           businessName: lic[1],
           regNumber: lic[2],
+          email: lic[3],
+          address: lic[4],
+          description: lic[5],
+          type: lic[6],
           sector: lic[7],
           ipfsHash: lic[8],
           applicant: lic[9],
-          date: lic[10] > 0 ? new Date(Number(lic[10]) * 1000).toLocaleDateString() : "New Request",
-          status: lic[12]
+          // FIX: Always show a date string. If timestamp is 0, use current date.
+          date: Number(lic[10]) > 0 
+            ? new Date(Number(lic[10]) * 1000).toLocaleDateString() 
+            : new Date().toLocaleDateString(),
+          status: status as any
         });
       }
       setApplications(data);
-    } catch (err) {
-      console.error("Sync Error:", err);
-    }
+    } finally { setLoading(false); }
   };
+ 
+
+  const filteredApps = useMemo(() => {
+    return applications.filter(app => {
+      const matchesStatus = filterStatus === "All" || app.status === filterStatus;
+      const matchesSearch = app.businessName.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            app.regNumber.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesStatus && matchesSearch;
+    });
+  }, [applications, filterStatus, searchQuery]);
+
+  const stats = useMemo(() => [
+    { label: "Pending", count: applications.filter(a => a.status === "Pending").length, filter: "Pending", color: "text-blue-600" },
+    { label: "Approved", count: applications.filter(a => a.status === "Approved").length, filter: "Approved", color: "text-emerald-600" },
+    { label: "Revoked", count: applications.filter(a => a.status === "Revoked").length, filter: "Revoked", color: "text-red-600" },
+    { label: "Total", count: applications.length, filter: "All", color: "text-slate-600" },
+  ], [applications]);
 
   const handleAction = async (id: number, action: "approve" | "reject" | "revoke") => {
     try {
@@ -97,148 +123,151 @@ const AdminDashboard = () => {
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
-
+      
       let tx;
       if (action === "approve") tx = await contract.approveLicense(id);
       else if (action === "reject") tx = await contract.rejectLicense(id);
-      else if (action === "revoke") {
-        if (!confirm("Are you sure?")) { setProcessingId(null); return; }
-        tx = await contract.revokeLicense(id);
-      }
+      else tx = await contract.revokeLicense(id);
 
-      toast({ title: "Processing...", description: "Please sign in MetaMask." });
+      toast({ title: "Confirming Transaction", description: "Executing on blockchain..." });
       await tx.wait(); 
-      toast({ title: "Success!", description: `License ${action}ed successfully.` });
+      toast({ title: "Success", description: `Record updated successfully.` });
       fetchBlockchainData();
-    } catch (error: any) {
-      console.error(error);
-      toast({ title: "Failed", description: error.reason || error.message, variant: "destructive" });
-    } finally {
-      setProcessingId(null);
-    }
+    } catch (error: any) { toast({ title: "Error", description: error.message, variant: "destructive" }); } 
+    finally { setProcessingId(null); }
   };
 
-  const stats = useMemo(() => [
-    { label: "Pending", count: applications.filter(a => a.status === "Pending").length, sub: "Action Required", color: "text-blue-600", bg: "bg-blue-50" },
-    { label: "Approved", count: applications.filter(a => a.status === "Approved").length, sub: "Total Minted", color: "text-green-600", bg: "bg-green-50" },
-    { label: "Revoked", count: applications.filter(a => a.status === "Revoked").length, sub: "Action Taken", color: "text-red-600", bg: "bg-red-50" },
-    { label: "Active", count: applications.length, sub: "Total issued", color: "text-purple-600", bg: "bg-purple-50" },
-  ], [applications]);
-
-  if (!isAdmin) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col">
-        <Header />
-        <div className="flex-grow flex items-center justify-center p-4">
-          <Card className="w-full max-w-md shadow-2xl border-t-4 border-slate-900">
-            <CardHeader className="text-center">
-              <div className="mx-auto bg-slate-100 p-4 rounded-full w-fit mb-4"><Lock className="h-10 w-10 text-slate-800" /></div>
-              <CardTitle className="text-2xl font-bold text-slate-900">Admin Verification</CardTitle>
-              <CardDescription>Connect the Admin Wallet to proceed.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {currentAddress && (
-                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-center text-sm text-red-700">
-                  <p className="font-bold">Access Denied</p>
-                </div>
-              )}
-              <Button onClick={handleLogin} className="w-full h-12 text-lg bg-slate-900 hover:bg-slate-800" disabled={isConnecting}>
-                {isConnecting ? <Loader2 className="animate-spin mr-2" /> : <><ShieldAlert className="mr-2 h-5 w-5" /> Verify Admin Identity</>}
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
+  if (viewState === "DISCONNECTED") return (
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      <Header /><div className="flex-grow flex items-center justify-center p-4"><Card className="w-full max-w-sm shadow-xl border-t-4 border-slate-900"><CardHeader className="text-center"><Lock className="mx-auto h-8 w-8 mb-2 text-slate-400"/><CardTitle>Admin Portal</CardTitle><CardDescription>Connect wallet to authorize registry access.</CardDescription></CardHeader><CardContent><Button onClick={() => window.ethereum.request({ method: 'eth_requestAccounts' })} className="w-full bg-slate-900">Authorize Access</Button></CardContent></Card></div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 font-sans">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-3xl font-bold text-slate-900">Admin Portal</h1>
-              <Badge className="bg-slate-900 text-white">SECURE MODE</Badge>
-            </div>
-            <p className="text-slate-500 text-sm mt-1">Logged in as: <span className="font-mono bg-slate-200 px-1 rounded">{currentAddress}</span></p>
+        
+        <div className="flex flex-col md:flex-row justify-between items-start mb-10 gap-6">
+          <div className="space-y-1">
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tighter flex items-center gap-3">
+              Admin Dashboard <Badge className="bg-slate-900 text-white font-bold">S E C U R E</Badge>
+            </h1>
+            <p className="text-sm text-slate-500">Admin: <span className="font-mono bg-white px-2 rounded border">{maskAddress(currentAddress)}</span></p>
           </div>
-          <div className="flex gap-2">
-             <Button variant="outline" onClick={fetchBlockchainData} disabled={processingId !== null}>
-               <RefreshCw className={`mr-2 h-4 w-4 ${processingId ? 'animate-spin' : ''}`} /> Refresh
-             </Button>
-             <Button variant="outline" onClick={() => setIsAdmin(false)}>Disconnect</Button>
-          </div>
+          <Button variant="outline" onClick={fetchBlockchainData} className="bg-white border-slate-200">
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        {/* CLICKABLE STATS GRID */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
           {stats.map((stat, i) => (
-            <Card key={i} className="border-none shadow-sm">
+            <Card key={i} onClick={() => setFilterStatus(stat.filter)} className={`border-none shadow-sm transition-all cursor-pointer ${filterStatus === stat.filter ? 'ring-2 ring-slate-900 bg-white' : 'bg-white opacity-90 hover:opacity-100 hover:translate-y-[-2px]'}`}>
               <CardContent className="p-6">
-                <p className={`text-sm font-medium ${stat.color} mb-1`}>{stat.label}</p>
-                <div className="flex items-end justify-between">
-                  <h3 className="text-3xl font-bold text-slate-900">{stat.count}</h3>
-                  <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">{stat.sub}</span>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${stat.color} mb-1`}>{stat.label}</p>
+                <div className="flex justify-between items-end">
+                   <h3 className="text-4xl font-extrabold text-slate-900">{stat.count}</h3>
+                   <span className="text-[10px] font-bold text-slate-300">Filter</span>
                 </div>
               </CardContent>
             </Card>
           ))}
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-10">
-          {[{ label: "Pending Apps", icon: FileText }, { label: "Approved List", icon: CheckCircle }, { label: "Revoke/Reject", icon: XCircle }, { label: "Renewals", icon: RefreshCw }, { label: "Verify", icon: Search }].map((btn, i) => (
-            <Button key={i} variant="outline" className="h-24 flex-col gap-2 bg-white hover:bg-slate-50 hover:border-slate-300 shadow-sm">
-              <btn.icon className="h-6 w-6 text-slate-600" /><span className="text-slate-700 font-medium">{btn.label}</span>
-            </Button>
-          ))}
-        </div>
-
-        <Card className="shadow-lg border-slate-200">
-          <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-            <h2 className="text-lg font-bold text-slate-900">Pending Applications</h2>
-            <p className="text-sm text-slate-500">Review requests. Actions are permanent on Blockchain.</p>
+        <Card className="shadow-xl border-none overflow-hidden bg-white rounded-2xl">
+          <div className="p-6 border-b border-slate-50 bg-slate-50/30 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileText className="h-5 w-5 text-blue-500"/> Applications ({filterStatus})</h2>
+            <div className="relative w-full sm:w-80">
+               <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+               <input placeholder="Search applicants..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 h-10 w-full rounded-xl border border-slate-100 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-slate-400 shadow-inner" />
+            </div>
           </div>
-          <CardContent className="p-0">
+          
+          <div className="overflow-x-auto">
             <Table>
-              <TableHeader>
+              <TableHeader className="bg-slate-50/50">
                 <TableRow>
-                  <TableHead className="pl-6">Business Name</TableHead>
-                  <TableHead>Applicant</TableHead>
+                  <TableHead className="pl-8">Business Name</TableHead>
+                  <TableHead>Applicant Details</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right pr-6">Decisions</TableHead>
+                  <TableHead className="text-right pr-8">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {applications.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-12 text-slate-500">No applications found on Blockchain yet.</TableCell></TableRow>
+                {filteredApps.length === 0 ? (
+                  <TableRow><TableCell colSpan={5} className="text-center py-24 text-slate-400 italic font-medium">No pending records found in this category.</TableCell></TableRow>
                 ) : (
-                  applications.map((app) => (
-                    <TableRow key={app.id}>
-                      <TableCell className="pl-6 font-medium text-slate-900">{app.businessName}</TableCell>
-                      <TableCell><div className="text-sm">{app.applicant.slice(0,6)}...{app.applicant.slice(-4)}</div><div className="text-xs text-slate-400">{app.sector}</div></TableCell>
-                      <TableCell>{app.date}</TableCell>
+                  filteredApps.map((app) => (
+                    <TableRow key={app.id} className="hover:bg-slate-50/50 transition-colors">
+                      <TableCell className="pl-8 font-semibold text-slate-900 uppercase tracking-tight">{app.businessName}</TableCell>
                       <TableCell>
-                        <Badge variant={app.status === "Approved" ? "default" : app.status === "Rejected" ? "destructive" : app.status === "Revoked" ? "destructive" : "secondary"}>{app.status}</Badge>
+                        <div className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 rounded border w-fit mb-1">{maskAddress(app.applicant)}</div>
+                        <div className="text-[11px] font-bold text-slate-500 uppercase">{app.sector} • {app.type}</div>
                       </TableCell>
-                      <TableCell className="text-right pr-6">
-                        <div className="flex justify-end gap-2 items-center">
-                            <Dialog>
-                                <DialogTrigger asChild><Button size="icon" variant="ghost" className="h-8 w-8"><Eye className="h-4 w-4 text-slate-500"/></Button></DialogTrigger>
-                                <DialogContent>
-                                    <DialogHeader><DialogTitle>{app.businessName}</DialogTitle></DialogHeader>
-                                    <div className="space-y-2 text-sm"><p><strong>Reg No:</strong> {app.regNumber}</p><p><strong>Sector:</strong> {app.sector}</p><p><strong>Address:</strong> {app.applicant}</p><p><strong>Proof:</strong> {app.ipfsHash ? (<a href={app.ipfsHash} target="_blank" className="ml-2 text-blue-600 underline inline-flex items-center">View IPFS <ExternalLink className="h-3 w-3 ml-1"/></a>) : " No Doc"}</p></div>
-                                </DialogContent>
-                            </Dialog>
-                            {app.status === "Pending" && (
-                              <>
-                                <Button size="sm" variant="outline" className="text-red-600 hover:bg-red-50 border-red-200" onClick={() => handleAction(app.id, "reject")} disabled={processingId === app.id}>Reject</Button>
-                                <Button size="sm" className="bg-slate-900 hover:bg-slate-800 text-white" onClick={() => handleAction(app.id, "approve")} disabled={processingId === app.id}>{processingId === app.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Approve & Mint"}</Button>
-                              </>
-                            )}
-                            {app.status === "Approved" && (<Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50" onClick={() => handleAction(app.id, "revoke")}>Revoke</Button>)}
-                            {(app.status === "Rejected" || app.status === "Revoked") && (<span className="text-slate-400 text-sm italic pr-2">Closed</span>)}
+                      <TableCell className="text-sm font-medium text-slate-600">{app.date}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={`border-none rounded-full px-3 py-0.5 text-[10px] font-bold ${app.status === "Approved" ? "text-emerald-700 bg-emerald-50" : app.status === "Pending" ? "text-blue-700 bg-blue-50" : "text-red-700 bg-red-50"}`}>
+                          {app.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right pr-8">
+                        <div className="flex justify-end gap-3 items-center">
+                          <Dialog>
+                            <DialogTrigger asChild><Button size="icon" variant="ghost" className="h-8 w-8 rounded-full hover:bg-slate-100"><Eye className="h-4 w-4 text-slate-400" /></Button></DialogTrigger>
+                            <DialogContent className="max-w-2xl p-8 border-none shadow-2xl rounded-3xl">
+                              <DialogHeader className="border-b pb-4 mb-6">
+                                <DialogTitle className="flex items-center gap-2 text-xl font-bold uppercase tracking-tight text-slate-900">
+                                  <ShieldCheck className="h-6 w-6 text-emerald-600"/> Registry Audit Record
+                                </DialogTitle>
+                              </DialogHeader>
+                              
+                              <div className="grid grid-cols-2 gap-x-10 gap-y-6">
+                                <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Entity Name</p><p className="font-bold text-slate-900 uppercase text-lg">{app.businessName}</p></div>
+                                <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Registry ID</p><p className="font-mono font-bold text-emerald-600 text-lg">{app.regNumber}</p></div>
+                                
+                                <div className="col-span-2 grid grid-cols-2 gap-6 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                                  <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Sector</p><p className="text-sm font-bold text-slate-700">{app.sector}</p></div>
+                                  <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Business Class</p><p className="text-sm font-bold text-slate-700">{app.type}</p></div>
+                                  <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Compliance Email</p><p className="text-sm font-bold text-slate-700">{app.email}</p></div>
+                                  <div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Submission Date</p><p className="text-sm font-bold text-slate-700">{app.date}</p></div>
+                                </div>
+
+                                <div className="col-span-2 space-y-4">
+                                  <div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1"><MapPin className="h-3 w-3"/> Premise Address</p>
+                                    <p className="text-sm font-medium text-slate-700 leading-relaxed bg-slate-50/50 p-3 rounded-xl border border-dashed">{app.address}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Audit Trail (Owner/PAN/Loc)</p>
+                                    <p className="text-[11px] text-slate-500 italic bg-white p-3 rounded-xl border border-slate-100 shadow-inner">{app.description}</p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="mt-8 pt-6 border-t border-slate-50 flex gap-4">
+                                <Button className="flex-1 bg-slate-900 hover:bg-slate-800 rounded-xl h-12 text-xs font-bold uppercase tracking-widest gap-2" onClick={() => window.open(app.ipfsHash)}>
+                                  <ExternalLink className="h-4 w-4"/> Authenticate KYC Vault
+                                </Button>
+                              </div>
+                            </DialogContent>
+                          </Dialog>
+
+                          {app.status === "Pending" && (
+                            <div className="flex gap-1">
+                              <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 text-[11px] font-bold uppercase px-3 h-8" onClick={() => handleAction(app.id, "reject")} disabled={processingId === app.id}>Reject</Button>
+                              <Button size="sm" className="bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold uppercase px-4 h-8 rounded-lg" onClick={() => handleAction(app.id, "approve")} disabled={processingId === app.id}>
+                                {processingId === app.id ? <Loader2 className="h-3 w-3 animate-spin"/> : "Approve"}
+                              </Button>
+                            </div>
+                          )}
+
+                          {app.status === "Approved" && (
+                            <Button size="sm" variant="ghost" className="text-red-400 hover:bg-red-50 text-[11px] font-bold uppercase px-4 h-8" onClick={() => handleAction(app.id, "revoke")} disabled={processingId === app.id}>
+                               Revoke
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -246,7 +275,7 @@ const AdminDashboard = () => {
                 )}
               </TableBody>
             </Table>
-          </CardContent>
+          </div>
         </Card>
       </main>
     </div>

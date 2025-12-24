@@ -1,107 +1,109 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { ShieldCheck, Wallet, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ShieldCheck, Menu, X, Wallet } from "lucide-react";
+import { ethers } from "ethers";
 
 const Header = () => {
   const location = useLocation();
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [walletAddress, setWalletAddress] = useState("");
+  const [wallet, setWallet] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  // Helper: Format wallet address (0x12...3456)
-  const formatAddress = (addr: string) => {
-    return `${addr.substring(0, 4)}...${addr.substring(addr.length - 4)}`;
-  };
+  const isActive = (path: string) => location.pathname === path;
 
-  // Connect to MetaMask
-  const connectWallet = async () => {
-    if (window.ethereum) {
-      try {
-        const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-        setWalletAddress(accounts[0]);
-      } catch (error) {
-        console.error("Connection failed", error);
-      }
-    } else {
-      alert("Please install MetaMask to use this feature.");
-    }
-  };
+  const navItems = [
+    { name: "Home", path: "/" },
+    { name: "Apply", path: "/apply" },
+    { name: "Verify", path: "/verify" },
+    { name: "Dashboard", path: "/user-dashboard" },
+    { name: "Admin", path: "/admin" },
+  ];
 
-  // Check connection on load
+  // 1. Check connection on load (Refresh sensitivity)
   useEffect(() => {
-    if (window.ethereum && window.ethereum.selectedAddress) {
-      setWalletAddress(window.ethereum.selectedAddress);
+    checkConnection();
+    
+    // Listen for account changes (if user switches wallet)
+    if (window.ethereum) {
+      window.ethereum.on("accountsChanged", (accounts: string[]) => {
+        if (accounts.length > 0) setWallet(accounts[0]);
+        else setWallet("");
+      });
     }
   }, []);
 
-  // minimal active link style
-  const navClass = (path: string) => 
-    location.pathname === path 
-      ? "text-sm font-semibold text-slate-900" 
-      : "text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors";
+  const checkConnection = async () => {
+    if (!window.ethereum) return;
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.listAccounts();
+      if (accounts.length > 0) {
+        setWallet(accounts[0].address);
+      }
+    } catch (err) {
+      console.error("Silent connection check failed", err);
+    }
+  };
+
+  // 2. Connect Function (Forces Popup)
+  const connectWallet = async () => {
+    if (!window.ethereum) return alert("MetaMask not found!");
+    setLoading(true);
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send("eth_requestAccounts", []); // Force popup
+      setWallet(accounts[0]);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-slate-100 bg-white">
+    <header className="sticky top-0 z-50 w-full border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         
-        {/* --- LOGO --- */}
-        <Link to="/" className="flex items-center gap-2">
+        {/* LOGO */}
+        <Link to="/" className="flex items-center gap-2 font-bold text-xl text-slate-900 hover:opacity-80 transition-opacity">
           <ShieldCheck className="h-6 w-6 text-blue-600" />
-          <span className="text-lg font-bold text-slate-900 tracking-tight">LicenseChain</span>
+          <span>LicenseChain</span>
         </Link>
 
-        {/* --- DESKTOP NAV --- */}
+        {/* NAV LINKS */}
         <nav className="hidden md:flex items-center gap-8">
-          <Link to="/" className={navClass("/")}>Home</Link>
-          <Link to="/apply" className={navClass("/apply")}>Apply</Link>
-          <Link to="/verify" className={navClass("/verify")}>Verify</Link>
-          <Link to="/user-dashboard" className={navClass("/user-dashboard")}>Dashboard</Link>
-          <Link to="/admin" className={navClass("/admin")}>Admin</Link>
+          {navItems.map((item) => (
+            <Link 
+              key={item.path} 
+              to={item.path} 
+              className={`text-sm font-medium transition-colors hover:text-blue-600 ${
+                isActive(item.path) ? "text-slate-900 font-bold" : "text-slate-500"
+              }`}
+            >
+              {item.name}
+            </Link>
+          ))}
         </nav>
 
-        {/* --- WALLET BUTTON --- */}
-        <div className="hidden md:flex items-center">
-          {walletAddress ? (
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-full">
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-xs font-mono text-slate-600">{formatAddress(walletAddress)}</span>
-            </div>
-          ) : (
-            <Button 
-              onClick={connectWallet} 
-              variant="outline"
-              size="sm"
-              className="border-slate-300 text-slate-700 hover:text-blue-600 hover:border-blue-600"
-            >
-              <Wallet className="mr-2 h-4 w-4" /> Connect
+        {/* CONNECT BUTTON (The Only One) */}
+        <div>
+          {!wallet ? (
+            <Button onClick={connectWallet} disabled={loading} className="bg-slate-900 text-white hover:bg-slate-800 shadow-sm">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Wallet className="h-4 w-4 mr-2" />}
+              Connect
             </Button>
+          ) : (
+            <div className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-full shadow-sm text-sm font-mono text-slate-700">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+              </span>
+              {wallet.slice(0,6)}...{wallet.slice(-4)}
+            </div>
           )}
         </div>
 
-        {/* --- MOBILE TOGGLE --- */}
-        <button 
-          className="md:hidden text-slate-600"
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-        >
-          {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-        </button>
       </div>
-
-      {/* --- MOBILE MENU --- */}
-      {isMobileMenuOpen && (
-        <div className="md:hidden border-t border-slate-100 bg-white p-4 space-y-4">
-          <nav className="flex flex-col gap-4">
-            <Link to="/" onClick={() => setIsMobileMenuOpen(false)} className="text-sm font-medium text-slate-600">Home</Link>
-            <Link to="/apply" onClick={() => setIsMobileMenuOpen(false)} className="text-sm font-medium text-slate-600">Apply</Link>
-            <Link to="/verify" onClick={() => setIsMobileMenuOpen(false)} className="text-sm font-medium text-slate-600">Verify License</Link>
-            <Link to="/user-dashboard" onClick={() => setIsMobileMenuOpen(false)} className="text-sm font-medium text-slate-600">Dashboard</Link>
-            <Link to="/admin" onClick={() => setIsMobileMenuOpen(false)} className="text-sm font-medium text-slate-600">Admin Portal</Link>
-          </nav>
-          <Button onClick={connectWallet} className="w-full bg-slate-900 text-white hover:bg-slate-800">
-            {walletAddress ? formatAddress(walletAddress) : "Connect Wallet"}
-          </Button>
-        </div>
-      )}
     </header>
   );
 };

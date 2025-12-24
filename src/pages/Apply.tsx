@@ -4,259 +4,217 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
 import Header from "@/components/Header";
-import { ArrowLeft, Upload, Loader2, Wallet } from "lucide-react";
-
-// --- WEB3 IMPORTS ---
+import { ArrowLeft, Upload, Loader2, ShieldCheck, Lock, Info, FileCheck } from "lucide-react";
 import { ethers } from "ethers";
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from "@/constants";
-import { uploadToIPFS } from "../utils/uploadToIPFS"; 
+import { uploadToIPFS } from "../utils/uploadToIPFS";
 
 const Apply = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  
-  // States
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState(""); 
+  const [status, setStatus] = useState("");
   const [walletAddress, setWalletAddress] = useState("");
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
-  // Form Data
+  // Form State
   const [formData, setFormData] = useState({
-    businessName: "",
-    regNumber: "",
-    address: "",
-    email: "",
-    description: ""
+    appName: "", designation: "Individual", pan: "",
+    address: "", state: "", city: "", district: "",
+    mobile: "", email: "", regNumber: ""
   });
-  
-  const [sector, setSector] = useState("");
-  const [licenseType, setLicenseType] = useState("");
-  const [kycFile, setKycFile] = useState<File | null>(null);
+  const [bizType, setBizType] = useState("");
+  const [subType, setSubType] = useState("");
+  const [idFile, setIdFile] = useState<File | null>(null);
+  const [regFile, setRegFile] = useState<File | null>(null);
 
-  // --- 1. CHECK WALLET ON LOAD ---
   useEffect(() => {
-    checkConnection();
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', (acc: any) => setWalletAddress(acc[0] || ""));
+    }
   }, []);
 
-  const checkConnection = async () => {
-    if (window.ethereum) {
-      try {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const accounts = await provider.listAccounts();
-        if (accounts.length > 0) {
-          setWalletAddress(accounts[0].address);
-        }
-      } catch (err) {
-        console.error("Not connected yet");
-      }
-    }
+  const handleInputChange = (e: any) => {
+    let { name, value } = e.target;
+    if (name === "regNumber" || name === "pan") value = value.toUpperCase().replace("_", "-");
+    setFormData({ ...formData, [name]: value });
   };
 
-  // --- 2. MANUAL CONNECT FUNCTION ---
-  const connectWallet = async () => {
-    if (!window.ethereum) return toast({ title: "MetaMask missing", variant: "destructive" });
-    try {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        // THIS LINE FORCES THE POPUP
-        const accounts = await provider.send("eth_requestAccounts", []);
-        setWalletAddress(accounts[0]);
-    } catch (error) {
-        console.error(error);
-    }
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: any) => {
     e.preventDefault();
-    
-    if (!sector || !licenseType || !kycFile) {
-        toast({ title: "Missing Fields", description: "Please complete all fields.", variant: "destructive" });
-        return;
-    }
+    if (!walletAddress) return setShowAuthModal(true);
+    if (!/^REG-\d{6}$/.test(formData.regNumber)) return toast({ title: "Format Error", description: "Use REG-XXXXXX", variant: "destructive" });
 
     setLoading(true);
-
     try {
-      if (!window.ethereum) {
-        throw new Error("MetaMask is not installed!");
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+      
+      // Fraud Check: Duplicate Registry
+      const count = Number(await contract.licenseCount());
+      for (let i = 1; i <= count; i++) {
+        const lic = await contract.getLicense(i);
+        if (lic[2] === formData.regNumber) throw new Error("This Registration Number is already taken.");
       }
 
-      // --- CRITICAL FIX: FORCE CONNECTION BEFORE STARTING ---
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      setStatus("Requesting Wallet Connection...");
-      await provider.send("eth_requestAccounts", []); // <--- THIS OPENS METAMASK
+      setStatus("Syncing Docs...");
+      const ipfsUrl = await uploadToIPFS(regFile!);
       const signer = await provider.getSigner();
+      const contractSigner = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 
-      // --- STEP 1: UPLOAD TO IPFS ---
-      setStatus("Uploading KYC document to IPFS...");
-      const ipfsUrl = await uploadToIPFS(kycFile);
-
-      if (!ipfsUrl) throw new Error("File upload failed.");
-      console.log("✅ IPFS Link:", ipfsUrl);
-
-      // --- STEP 2: SEND TRANSACTION ---
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      const fullDetails = `Owner: ${formData.appName} | PAN: ${formData.pan} | Loc: ${formData.city}, ${formData.state} | Type: ${subType}`;
       
-      setStatus("Please Confirm Transaction in MetaMask...");
-      console.log("Sending Transaction...");
-      
-      const tx = await contract.applyForLicense([
-          formData.businessName,  
-          formData.regNumber,     
-          formData.email,         
-          formData.address,       
-          formData.description,   
-          licenseType,            
-          sector,                 
-          ipfsUrl                 
-      ]);
+      const tx = await contractSigner.applyForLicense(
+        formData.appName, formData.regNumber, formData.email, 
+        `${formData.address}, ${formData.city}, ${formData.state}`, 
+        fullDetails, subType, bizType, ipfsUrl
+      );
 
-      setStatus("Transaction Sent! Waiting for Block Confirmation...");
-      await tx.wait(); 
-
-      toast({
-        title: "Success! 🚀",
-        description: "Application sent to Admin.",
-        className: "bg-green-600 text-white",
-      });
-      
+      await tx.wait();
+      toast({ title: "Vault Secured", description: "Application registered on Blockchain." });
       navigate("/user-dashboard");
-
-    } catch (error: any) {
-      console.error(error);
-      const errorMessage = error.code === "ACTION_REJECTED" 
-        ? "You rejected the request."
-        : error.reason || error.message || "Transaction failed.";
-
-      toast({ title: "Error", description: errorMessage, variant: "destructive" });
-    } finally {
-      setLoading(false);
-      setStatus("");
-    }
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally { setLoading(false); setStatus(""); }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       <Header />
-      <main className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto">
-          
-          {/* Top Bar with Connect Button */}
-          <div className="flex justify-between items-center mb-6">
-            <Button variant="ghost" className="pl-0" onClick={() => navigate("/user-dashboard")}>
-                <ArrowLeft className="mr-2 h-4 w-4" /> Back
-            </Button>
-            
-            {!walletAddress ? (
-                <Button onClick={connectWallet} variant="outline" className="border-blue-200 text-blue-700 hover:bg-blue-50">
-                    <Wallet className="mr-2 h-4 w-4" /> Connect Wallet
-                </Button>
-            ) : (
-                <div className="flex items-center gap-2 text-sm font-mono text-green-700 bg-green-50 px-3 py-1 rounded border border-green-200">
-                    <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></div>
-                    {walletAddress.slice(0,6)}...{walletAddress.slice(-4)}
-                </div>
-            )}
-          </div>
+      <main className="flex-grow container mx-auto px-4 py-10 max-w-4xl">
+        <Button variant="ghost" className="mb-4 text-slate-400" onClick={() => navigate("/user-dashboard")}><ArrowLeft className="mr-2 h-4 w-4" /> Exit</Button>
+        
+        <Card className="border border-blue-100 shadow-2xl overflow-hidden rounded-2xl">
+          {/* UPDATED HERO HEADER: Light Blue Gradient */}
+          <CardHeader className="bg-gradient-to-r from-blue-50 to-white border-b border-blue-100 p-8">
+            <CardTitle className="text-xl font-black flex items-center gap-2 uppercase tracking-tighter text-slate-900">
+              <ShieldCheck className="text-blue-500 h-6 w-6" /> LicenseChain Registry Portal
+            </CardTitle>
+          </CardHeader>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-xl font-bold">New License Application</CardTitle>
-              <CardDescription>Fill in the details to submit to the Blockchain.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-6">
-                
-                {/* 1. Name & Reg No */}
-                <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <Label>Business Name</Label>
-                        <Input name="businessName" placeholder="Tech Solutions Ltd" onChange={handleInputChange} required />
+          <CardContent className="p-8 space-y-10 bg-white">
+            <form onSubmit={handleSubmit} className="space-y-10">
+              
+              {/* SECTION: APPLICANT DETAILS */}
+              <div className="space-y-6">
+                <h3 className="text-xs font-black text-blue-600 uppercase tracking-widest border-b pb-2">01. Applicant Details</h3>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Name of Applicant / Company</Label>
+                    <Input name="appName" onChange={handleInputChange} required className="border-slate-100" />
+                  </div>
+                  <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Designation</Label>
+                    <RadioGroup defaultValue="Individual" onValueChange={(v) => setFormData({...formData, designation: v})} className="flex gap-4 pt-2">
+                      {["Individual", "Partner", "Proprietor"].map(d => (
+                        <div key={d} className="flex items-center space-x-2"><RadioGroupItem value={d} id={d} className="border-blue-200 text-blue-600" /><Label htmlFor={d} className="text-xs text-slate-600">{d}</Label></div>
+                      ))}
+                    </RadioGroup>
+                  </div>
+                </div>
+                <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Business PAN No. *</Label>
+                  <Input name="pan" placeholder="ABCDE1234F" onChange={handleInputChange} required className="border-slate-100" />
+                  <p className="text-[9px] text-slate-400 italic font-medium">* PAN is a business identity as decided by authority.</p>
+                </div>
+              </div>
+
+              {/* SECTION: PREMISES ADDRESS */}
+              <div className="space-y-6">
+                <h3 className="text-xs font-black text-blue-600 uppercase tracking-widest border-b pb-2">02. Premises Location</h3>
+                <div className="space-y-4">
+                  <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Complete Address</Label>
+                    <Textarea name="address" onChange={handleInputChange} required placeholder="Building No, Street..." className="border-slate-100" />
+                    <p className="text-[9px] text-slate-400 italic">* Please type the address as per the Proof of Possession.</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">State</Label><Input name="state" onChange={handleInputChange} required className="border-slate-100" /></div>
+                    <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">City</Label><Input name="city" onChange={handleInputChange} required className="border-slate-100" /></div>
+                    <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">District/Region</Label><Input name="district" onChange={handleInputChange} required className="border-slate-100" /></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION: NATURE OF BUSINESS */}
+              <div className="space-y-6">
+                <h3 className="text-xs font-black text-blue-600 uppercase tracking-widest border-b pb-2">03. Nature of Business</h3>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Business Category</Label>
+                    <Select onValueChange={setBizType} required>
+                      <SelectTrigger className="border-slate-100"><SelectValue placeholder="Choose Category" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Food Services">Food Services</SelectItem>
+                        <SelectItem value="Manufacturer">Manufacturer</SelectItem>
+                        <SelectItem value="Trade/Retail">Trade & Retail</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {bizType && (
+                    <div className="space-y-2 font-bold animate-in fade-in duration-300"><Label className="text-[10px] uppercase font-bold text-slate-500">Specific Type</Label>
+                      <Select onValueChange={setSubType} required>
+                        <SelectTrigger className="border-slate-100"><SelectValue placeholder="Choose Type" /></SelectTrigger>
+                        <SelectContent>
+                          {bizType === "Food Services" && ["Canteen", "Caterer", "Cloud Kitchen", "Restaurant", "Cafe", "Snacks Shop"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                          {bizType === "Manufacturer" && ["Exporter-Manufacturer", "Food Supplements", "Health Supplements"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                          {bizType === "Trade/Retail" && ["Wholesaler", "Distributor", "Retailer"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                     </div>
-                    <div className="space-y-2">
-                        <Label>Registration Number</Label>
-                        <Input name="regNumber" placeholder="GST-12345" onChange={handleInputChange} required />
-                    </div>
+                  )}
                 </div>
+              </div>
 
-                {/* 2. Email */}
-                <div className="space-y-2">
-                    <Label>Email Address</Label>
-                    <Input type="email" name="email" placeholder="contact@business.com" onChange={handleInputChange} required />
-                </div>
-
-                {/* 3. Address & Description */}
-                <div className="space-y-2">
-                    <Label>Physical Address</Label>
-                    <Textarea name="address" placeholder="123 Block Chain St, Web3 City" onChange={handleInputChange} required />
-                </div>
-                <div className="space-y-2">
-                    <Label>Description</Label>
-                    <Textarea name="description" placeholder="Briefly describe your business activity..." onChange={handleInputChange} required />
-                </div>
-
-                {/* 4. Selectors */}
-                <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <Label>License Type</Label>
-                        <Select onValueChange={setLicenseType} required>
-                            <SelectTrigger><SelectValue placeholder="Select Type" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="Business">Business Registration</SelectItem>
-                                <SelectItem value="Trade">Trade License</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="space-y-2">
-                        <Label>Sector</Label>
-                        <Select onValueChange={setSector} required>
-                            <SelectTrigger><SelectValue placeholder="Select Sector" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="Retail">Retail</SelectItem>
-                                <SelectItem value="Technology">Technology</SelectItem>
-                                <SelectItem value="Healthcare">Healthcare</SelectItem>
-                                <SelectItem value="Food">Food & Beverage</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-                </div>
-
-                {/* 5. DOCUMENTS (IPFS) */}
-                <div className="p-6 bg-slate-100 rounded-md border-2 border-dashed border-slate-300 text-center hover:bg-slate-200 transition relative">
-                    <input 
-                        type="file" 
-                        onChange={(e) => setKycFile(e.target.files?.[0] || null)} 
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        required 
-                    />
-                    <div className="flex flex-col items-center gap-2">
-                        <Upload className="h-8 w-8 text-slate-500" />
-                        <span className="font-semibold text-sm text-slate-700">
-                            {kycFile ? kycFile.name : "Click to Upload KYC Document"}
-                        </span>
-                        <span className="text-xs text-slate-400">PDF, JPG or PNG</span>
-                    </div>
-                </div>
-
-                <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 h-12 text-lg" disabled={loading}>
-                    {loading ? (
-                        <div className="flex items-center gap-2">
-                             <Loader2 className="animate-spin h-5 w-5" /> {status}
+              {/* SECTION: REGISTRATION & DOCUMENTS */}
+              <div className="space-y-6">
+                <h3 className="text-xs font-black text-blue-600 uppercase tracking-widest border-b pb-2">04. Authentication Vault</h3>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Registration ID</Label>
+                      <div className="group relative"><Info className="h-3 w-3 text-slate-300 cursor-help" />
+                        <div className="absolute bottom-full mb-2 left-0 w-64 p-3 bg-slate-900 text-[10px] text-slate-200 rounded opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 border border-slate-700">
+                          Format: <span className="text-blue-400 font-mono">REG-XXXXXX</span>. Used as 2FA secret for verifiers.
                         </div>
-                    ) : "Submit Application"}
-                </Button>
+                      </div>
+                    </div>
+                    <Input name="regNumber" placeholder="REG-123456" onChange={handleInputChange} required className="font-mono h-12 border-slate-100" />
+                  </div>
+                  <div className="space-y-2"><Label className="text-[10px] uppercase font-bold text-slate-500">Contact Number</Label><Input name="mobile" placeholder="+91" onChange={handleInputChange} required className="h-12 border-slate-100" /></div>
+                </div>
 
-              </form>
-            </CardContent>
-          </Card>
-        </div>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="p-6 bg-slate-50 rounded-xl border-2 border-dashed relative text-center group hover:bg-white hover:border-emerald-500 transition-all">
+                    <input type="file" onChange={(e:any) => setIdFile(e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required />
+                    <Upload className="h-6 w-6 text-slate-300 mx-auto mb-2 group-hover:text-emerald-500" /><p className="text-[10px] font-bold text-slate-500 tracking-tight">{idFile ? idFile.name : "Personal ID"}</p>
+                  </div>
+                  <div className="p-6 bg-slate-50 rounded-xl border-2 border-dashed relative text-center group hover:bg-white hover:border-emerald-500 transition-all">
+                    <input type="file" onChange={(e:any) => setRegFile(e.target.files[0])} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required />
+                    <Upload className="h-6 w-6 text-slate-300 mx-auto mb-2 group-hover:text-emerald-500" /><p className="text-[10px] font-bold text-slate-500 tracking-tight">{regFile ? regFile.name : "Business Doc"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* UPDATED ACTION BUTTON: Emerald Green */}
+              <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 h-16 text-sm font-black uppercase tracking-[0.3em] shadow-xl transition-all rounded-xl" disabled={loading}>
+                {loading ? <><Loader2 className="animate-spin h-5 w-5 mr-3" /> {status}</> : <><FileCheck className="h-5 w-5 mr-2" /> Submit Application</>}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        {/* AUTH MODAL */}
+        {showAuthModal && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 bg-slate-900/40 backdrop-blur-md">
+            <Card className="w-full max-w-sm p-8 text-center space-y-6 shadow-2xl border-none rounded-3xl">
+              <div className="mx-auto bg-emerald-50 p-5 rounded-full w-fit"><Lock className="h-10 w-10 text-emerald-600" /></div>
+              <h3 className="font-black text-xl uppercase tracking-tighter">Security Authentication</h3>
+              <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest leading-relaxed">Connect Wallet to Sign Registry Entry and Commit to Blockchain Vault.</p>
+              <Button onClick={() => window.ethereum.request({ method: 'eth_requestAccounts' })} className="w-full bg-slate-900 h-12 uppercase font-black text-xs tracking-widest rounded-xl">Authorize Access</Button>
+              <Button variant="ghost" onClick={() => setShowAuthModal(false)} className="text-[10px] uppercase font-bold text-slate-400">Cancel</Button>
+            </Card>
+          </div>
+        )}
       </main>
     </div>
   );
