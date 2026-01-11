@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-/**
- * @title LicenseChain - Decentralized Digital Licensing System
- * @dev Manages the issuance, revocation, verification, and renewal of business licenses.
- * @author [Your Name]
- */
 contract LicenseChain {
     
     // --- 1. DATA STRUCTURES (The "Schema" of your Database) ---
