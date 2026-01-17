@@ -48,7 +48,7 @@
 
 - **Devnet Address:** `INSERT_DEVNET_ADDRESS_HERE`  
 
-![LicenseChain Screenshot](https://github.com/user-attachments/assets/72b58759-950d-4f23-a058-cb2ddad1c7a2)
+![LicenseChain Screenshot]()
 
 - **Compiler Version:** Solidity (Latest Stable)  
 - **Dependencies:** OpenZeppelin Contracts, Ethers.js  
@@ -69,15 +69,6 @@
 
 ## 🎨 Screenshots
 
-<img width="1268" height="902" alt="Screenshot 1" src="https://github.com/user-attachments/assets/72b58759-950d-4f23-a058-cb2ddad1c7a2" />  
-
-<img width="1272" height="868" alt="Screenshot 2" src="https://github.com/user-attachments/assets/5d706639-e740-408f-aa4f-45f1a57726a6" />  
-
-<img width="1269" height="871" alt="Screenshot 3" src="https://github.com/user-attachments/assets/36e4428c-5c87-4ec7-b3b0-1a8f06c2a628" />  
-
-<img width="1276" height="905" alt="Screenshot 4" src="https://github.com/user-attachments/assets/e96581b1-6638-45c6-ab61-8403d8589ca5" />  
-
-<img width="1280" height="903" alt="Screenshot 5" src="https://github.com/user-attachments/assets/2e4eb6b3-47f9-4c33-9607-188953599e85" />  
 
 ---
 
